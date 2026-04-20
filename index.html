@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Statcast 3D Pitch Tracker</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
+        #info {
+            position: absolute; top: 10px; left: 10px; color: white;
+            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px;
+            pointer-events: none; z-index: 10;
+        }
+        #webgazerVideoContainer { display: none !important; } /* Hide raw webcam feed */
+    </style>
+</head>
+<body>
+
+<div id="info">
+    <h2>Statcast Pitch Viz</h2>
+    <p>Status: <span id="status">Initializing Eye Tracking...</span></p>
+    <p>Controls: Move head to shift view. Focus on ball to zoom.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgazer@2.1.0/dist/webgazer.js"></script>
+
+<script>
+    let scene, camera, renderer, ball;
+    let pitchPath = [];
+    let progress = 0;
+    
+    // Constants for Batter's Box Perspective
+    const MOUND_DISTANCE = 60.5; // Feet
+    const STRIKE_ZONE_Z = 0;
+    const RELEASE_Z = -MOUND_DISTANCE;
+
+    init();
+    setupWebGazer();
+    animate();
+
+    function init() {
+        // 1. Scene Setup
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+
+        // 2. Camera Setup (The Batter's Eye)
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(2, 5, 3); // Slightly offset from home plate for realism
+        camera.lookAt(0, 3, -MOUND_DISTANCE);
+
+        // 3. Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 4. Lighting
+        const light = new THREE.PointLight(0xffffff, 1, 100);
+        light.position.set(0, 10, 0);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        // 5. Create "Field" & Strike Zone
+        const grid = new THREE.GridHelper(100, 20, 0x444444, 0x222222);
+        grid.rotation.x = 0;
+        scene.add(grid);
+
+        const szGeo = new THREE.PlaneGeometry(1.5, 2);
+        const szMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.3 });
+        const strikeZone = new THREE.Mesh(szGeo, szMat);
+        strikeZone.position.set(0, 2.5, 0);
+        scene.add(strikeZone);
+
+        // 6. The Baseball
+        const ballGeo = new THREE.SphereGeometry(0.12, 32, 32);
+        const ballMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+        ball = new THREE.Mesh(ballGeo, ballMat);
+        scene.add(ball);
+
+        // 7. Mock Statcast Trajectory (Simulating a Curveball)
+        for (let i = 0; i <= 100; i++) {
+            let t = i / 100;
+            let z = -MOUND_DISTANCE + (MOUND_DISTANCE * t);
+            let x = Math.sin(t * Math.PI) * 1.5; // Horizontal break
+            let y = 6 - (Math.pow(t, 2) * 4);    // Gravity/Vertical drop
+            pitchPath.push(new THREE.Vector3(x, y, z));
+        }
+
+        window.addEventListener('resize', onWindowResize, false);
+    }
+
+    function setupWebGazer() {
+        webgazer.setGazeListener((data, elapsedTime) => {
+            if (data == null) return;
+
+            // Mapping Gaze/Head Movement to Camera
+            // Normalizing screen coordinates to -1 to 1
+            const nx = (data.x / window.innerWidth) - 0.5;
+            const ny = (data.y / window.innerHeight) - 0.5;
+
+            // "Head Movement" - Shifts camera slightly based on position
+            camera.position.x = 2 + (nx * 2);
+            camera.position.y = 5 - (ny * 1.5);
+
+            // "Eye Zooming" - If gazing toward center, narrow FOV
+            const distFromCenter = Math.sqrt(nx*nx + ny*ny);
+            if (distFromCenter < 0.2) {
+                camera.fov = THREE.MathUtils.lerp(camera.fov, 45, 0.1);
+            } else {
+                camera.fov = THREE.MathUtils.lerp(camera.fov, 75, 0.1);
+            }
+            camera.updateProjectionMatrix();
+
+        }).begin();
+
+        document.getElementById('status').innerText = "Active. Tracking Face...";
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Loop the pitch animation
+        progress += 0.01;
+        if (progress > 1) progress = 0;
+
+        let index = Math.floor(progress * (pitchPath.length - 1));
+        ball.position.copy(pitchPath[index]);
+
+        renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+</script>
+</body>
+</html>
