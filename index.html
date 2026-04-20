@@ -3,109 +3,190 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>iPhone Statcast Viz</title>
+    <title>Statcast Gaze Trigger</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; position: fixed; width: 100%; height: 100%; }
-        #info {
-            position: absolute; top: 10px; left: 10px; color: white;
-            background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px;
-            font-size: 12px; z-index: 10; font-family: -apple-system, sans-serif;
+        body { margin: 0; overflow: hidden; background: #000; position: fixed; width: 100%; height: 100%; font-family: -apple-system, sans-serif; }
+        
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10;
         }
-        /* Important for Safari performance */
+
+        #status-box {
+            position: absolute; top: 20px; left: 20px; color: white;
+            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 10px;
+            border: 1px solid #444;
+        }
+
+        #red-dot {
+            position: absolute; width: 15px; height: 15px;
+            background: red; border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px rgba(255,0,0,0.8);
+            transition: transform 0.1s ease-out;
+            border: 2px solid white;
+        }
+
         #webgazerVideoContainer { display: none !important; }
     </style>
 </head>
 <body>
 
-<div id="info">
-    <b>Statcast Mobile</b><br>
-    Status: <span id="status">Waiting for Camera...</span>
+<div id="ui-layer">
+    <div id="status-box">
+        <b id="instruction">LOOK DOWN AT CATCHER</b><br>
+        <small id="sub-text">Calibration: Tap screen while looking at your finger</small>
+    </div>
+    <div id="red-dot"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/webgazer@2.1.0/dist/webgazer.js"></script>
 
 <script>
-    let scene, camera, renderer, ball;
+    let scene, camera, renderer, ball, plate;
     let pitchPath = [];
     let progress = 0;
+    let gameState = 'LOOK_AT_CATCHER'; // States: LOOK_AT_CATCHER, LOOK_AT_PITCHER, PITCHING, CONTACT
+    
+    const dot = document.getElementById('red-dot');
+    const instruction = document.getElementById('instruction');
 
+    // 1. Initialize 3D Scene
     function init() {
         scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0a);
+
         camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-        
-        // Batter position for mobile (closer to plate)
-        camera.position.set(1.5, 4.5, 5); 
-        
+        camera.position.set(2, 5, 5); // Batter's perspective
+
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        // Lights
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 7.5);
+        // Lighting
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        light.position.set(5, 10, 5);
         scene.add(light);
         scene.add(new THREE.AmbientLight(0x404040));
 
-        // Pitch Path (Statcast Simulation)
+        // Home Plate (Catcher Area)
+        const plateGeo = new THREE.PlaneGeometry(1.5, 1.5);
+        const plateMat = new THREE.MeshBasicMaterial({ color: 0x555555, side: THREE.DoubleSide });
+        plate = new THREE.Mesh(plateGeo, plateMat);
+        plate.rotation.x = Math.PI / 2;
+        plate.position.set(0, 0.01, 0);
+        scene.add(plate);
+
+        // Baseball
+        const ballGeo = new THREE.SphereGeometry(0.18, 32, 32);
+        const ballMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+        ball = new THREE.Mesh(ballGeo, ballMat);
+        ball.visible = false;
+        scene.add(ball);
+
+        // Simulated Statcast Path (Fastball with late run)
         for (let i = 0; i <= 100; i++) {
             let t = i / 100;
             let z = -60.5 + (60.5 * t);
-            let x = Math.sin(t * Math.PI) * 1.2; 
-            let y = 5.8 - (t * t * 3.5);
+            let x = (t > 0.7) ? (t - 0.7) * 2 : 0; // Late tailing movement
+            let y = 6 - (t * 3.5); // Downward trajectory
             pitchPath.push(new THREE.Vector3(x, y, z));
         }
-
-        // Baseball
-        ball = new THREE.Mesh(
-            new THREE.SphereGeometry(0.15, 16, 16),
-            new THREE.MeshStandardMaterial({ color: 0xffffff })
-        );
-        scene.add(ball);
 
         animate();
     }
 
+    // 2. Setup Gaze Tracking
     function setupWebGazer() {
         webgazer.setGazeListener((data, elapsedTime) => {
-            if (data == null) return;
+            if (!data) return;
 
-            // Mapping Gaze to Camera Perspective
+            // Move Red Dot UI
+            dot.style.left = data.x + 'px';
+            dot.style.top = data.y + 'px';
+
+            // Normalized coordinates (-0.5 to 0.5)
             const nx = (data.x / window.innerWidth) - 0.5;
             const ny = (data.y / window.innerHeight) - 0.5;
 
-            // Higher sensitivity for smaller iPhone screens
-            camera.position.x = 1.5 + (nx * 3);
-            camera.position.y = 4.5 - (ny * 2);
-            
-            // Zoom effect
-            if (Math.abs(nx) < 0.15 && Math.abs(ny) < 0.15) {
-                camera.fov = THREE.MathUtils.lerp(camera.fov, 40, 0.1);
-            } else {
-                camera.fov = THREE.MathUtils.lerp(camera.fov, 70, 0.1);
-            }
-            camera.updateProjectionMatrix();
-        })
-        .showVideoPreview(false) // Keeps performance high on mobile
-        .begin();
+            // Head Movement: Shift camera based on gaze/head position
+            camera.position.x = 2 + (nx * 4);
+            camera.position.y = 5 - (ny * 3);
+            camera.lookAt(0, 2.5, -30);
 
-        document.getElementById('status').innerText = "Tracking Active";
+            // STATE MACHINE LOGIC
+            if (gameState === 'LOOK_AT_CATCHER' && ny > 0.25) {
+                gameState = 'LOOK_AT_PITCHER';
+                instruction.innerText = "NOW LOOK AT PITCHER";
+                instruction.style.color = "#00ff00";
+            } 
+            else if (gameState === 'LOOK_AT_PITCHER' && ny < -0.2) {
+                gameState = 'PITCHING';
+                instruction.innerText = "TRACK THE BALL!";
+                ball.visible = true;
+                progress = 0;
+            }
+
+            // Tracking & Zoom Logic
+            if (gameState === 'PITCHING') {
+                const ballPos = ball.position.clone().project(camera);
+                const bx = (ballPos.x + 1) / 2 * window.innerWidth;
+                const by = (-(ballPos.y - 1) / 2) * window.innerHeight;
+
+                const dist = Math.sqrt(Math.pow(data.x - bx, 2) + Math.pow(data.y - by, 2));
+
+                if (dist < 100) { // If looking at ball
+                    camera.fov = THREE.MathUtils.lerp(camera.fov, 35, 0.1);
+                    if (dist < 40 && progress > 0.9) { // Contact window
+                        triggerFlash();
+                    }
+                } else { // Expanding view (Losing the pitch)
+                    camera.fov = THREE.MathUtils.lerp(camera.fov, 85, 0.05);
+                }
+                camera.updateProjectionMatrix();
+            }
+
+        }).begin();
+    }
+
+    function triggerFlash() {
+        scene.background = new THREE.Color(0xffffff);
+        setTimeout(() => {
+            scene.background = new THREE.Color(0x0a0a0a);
+            resetGame();
+        }, 100);
+    }
+
+    function resetGame() {
+        gameState = 'LOOK_AT_CATCHER';
+        instruction.innerText = "LOOK DOWN AT CATCHER";
+        instruction.style.color = "white";
+        ball.visible = false;
+        progress = 0;
     }
 
     function animate() {
         requestAnimationFrame(animate);
-        progress += 0.008; // Slower for better tracking on mobile
-        if (progress > 1) progress = 0;
 
-        let idx = Math.floor(progress * (pitchPath.length - 1));
-        ball.position.copy(pitchPath[idx]);
-        
+        if (gameState === 'PITCHING') {
+            progress += 0.012; // Speed of the pitch
+            if (progress > 1) {
+                resetGame();
+            } else {
+                let idx = Math.floor(progress * (pitchPath.length - 1));
+                ball.position.copy(pitchPath[idx]);
+            }
+        }
+
         renderer.render(scene, camera);
     }
 
-    init();
-    setupWebGazer();
+    window.onload = () => {
+        init();
+        setupWebGazer();
+    };
 </script>
 </body>
 </html>
